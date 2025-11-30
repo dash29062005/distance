@@ -1,0 +1,27 @@
+Lib/
+Scripts/
+pyvenv.cfg
+share/
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Virtualenv
+env/
+venv/
+
+# Build junk
+dist/
+build/
+*.egg-info
+
+# CV/ML artifacts
+*.pt
+*.onnx
+*.pth
+*.engine
+
+# Data
+data/
+logs/
