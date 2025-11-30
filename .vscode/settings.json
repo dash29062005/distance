@@ -6,6 +6,5 @@
     "python.terminal.useEnvFile": true,
     "python.envFile": "${workspaceFolder}/.env",
 
-    "telemetry.enableTelemetry": false,
-    "telemetry.enableCrashReporter": false
+    
 }
