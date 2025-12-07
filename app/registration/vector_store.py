@@ -17,23 +17,49 @@ class VectorStore:
 
     def add(self, obj_id, vector, metadata=None):
         """Insert vector into Qdrant"""
-        v = vector.tolist()
         self.client.upsert(
             collection_name=self.collection,
             points=[
                 PointStruct(
                     id=obj_id,
-                    vector=v,
+                    vector=vector.tolist(),
                     payload=metadata or {}
                 )
             ]
         )
 
     def search(self, vector, top_k=3):
-        """Return nearest embeddings"""
-        result = self.client.search(
+        """Return nearest embeddings — using query_points for local Qdrant"""
+        res = self.client.query_points(
             collection_name=self.collection,
-            query_vector=vector.tolist(),
+            query=vector.tolist(),
             limit=top_k
         )
-        return result
+        return res.points
+
+    def next_id(self):
+        """Generate the next unique ID based on the current collection."""
+        try:
+            # Retrieve all existing IDs in the collection
+            points = self.client.scroll(
+                collection_name=self.collection,
+                limit=1,
+                with_payload=False,
+                with_vectors=False
+            )
+
+            if points and points.points:
+                # Extract the maximum ID and increment
+                max_id = max(point.id for point in points.points)
+                return max_id + 1
+            else:
+                # Start from ID 1 if the collection is empty
+                return 1
+        except Exception as e:
+            # Handle cases where the collection might be empty or inaccessible
+            print(f"Error generating next ID: {e}")
+            return 1
+
+    def get_next_id(self):
+        """Generate the next unique ID based on the current collection."""
+        return self.next_id()
