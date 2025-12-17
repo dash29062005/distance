@@ -3,91 +3,111 @@ import cv2
 
 
 class KalmanBox:
-    def __init__(self):
-        """
-        Kalman filter with 6 state variables:
-        x, y, vx, vy, w, h
-        """
-        self.kf = cv2.KalmanFilter(6, 4)  # (state_dim=6, measurement_dim=4)
+    """
+    Smooth bounding boxes (cx, cy, w, h)
+    with prediction when detection disappears.
 
-        # State transition matrix
-        dt = 1.0  # assuming ~30 FPS, we update each frame
+    Now includes:
+    - Hard reset (for NO confirmation)
+    - Dead-frame counter (prevents collapse)
+    - Min-size guard
+    """
 
-        self.kf.transitionMatrix = np.array([
-            [1, 0, dt, 0, 0, 0],
-            [0, 1, 0, dt, 0, 0],
-            [0, 0, 1, 0,  0, 0],
-            [0, 0, 0, 1,  0, 0],
-            [0, 0, 0, 0,  1, 0],
-            [0, 0, 0, 0,  0, 1],
-        ], dtype=np.float32)
+    def __init__(self, max_missing=5, min_size=10):
+        self.kf = cv2.KalmanFilter(8, 4)
 
-        # Measurement matrix
-        self.kf.measurementMatrix = np.array([
-            [1, 0, 0, 0, 0, 0],  # x
-            [0, 1, 0, 0, 0, 0],  # y
-            [0, 0, 0, 0, 1, 0],  # w
-            [0, 0, 0, 0, 0, 1],  # h
-        ], dtype=np.float32)
+        # CONSTANT VELOCITY MODEL
+        self.kf.transitionMatrix = np.eye(8, dtype=np.float32)
+        self.kf.transitionMatrix[0, 4] = 1
+        self.kf.transitionMatrix[1, 5] = 1
+        self.kf.transitionMatrix[2, 6] = 1
+        self.kf.transitionMatrix[3, 7] = 1
 
-        # Process noise (higher = more adaptable)
-        self.kf.processNoiseCov = np.eye(6, dtype=np.float32) * 0.03
+        # Measurement picks out cx,cy,w,h
+        self.kf.measurementMatrix = np.zeros((4, 8), np.float32)
+        self.kf.measurementMatrix[0, 0] = 1
+        self.kf.measurementMatrix[1, 1] = 1
+        self.kf.measurementMatrix[2, 2] = 1
+        self.kf.measurementMatrix[3, 3] = 1
 
-        # Measurement noise (lower = more trust in detection)
-        self.kf.measurementNoiseCov = np.eye(4, dtype=np.float32) * 0.01
-
-        # Initial error covariance
-        self.kf.errorCovPost = np.eye(6, dtype=np.float32)
+        # Noise tuning
+        self.kf.processNoiseCov = np.eye(8, dtype=np.float32) * 1e-2
+        self.kf.measurementNoiseCov = np.eye(4, dtype=np.float32) * 0.5
+        self.kf.errorCovPost = np.eye(8, dtype=np.float32)
 
         self.initialized = False
-        self.stable_score = 0.0
+        self.missing_frames = 0
+        self.max_missing = max_missing
+        self.min_size = min_size
 
-    def _bbox_to_state(self, bbox):
+    # -------------------------------------------------------
+    def _bbox_to_measure(self, bbox):
         x1, y1, x2, y2 = bbox
-        w = x2 - x1
-        h = y2 - y1
+        w = max(x2 - x1, self.min_size)
+        h = max(y2 - y1, self.min_size)
         cx = x1 + w / 2
         cy = y1 + h / 2
-        return cx, cy, w, h
+        return np.array([cx, cy, w, h], dtype=np.float32)
 
-    def correct(self, bbox):
+    def _measure_to_bbox(self, m):
+        cx, cy, w, h = m
+        w = max(w, self.min_size)
+        h = max(h, self.min_size)
+        x1 = int(cx - w / 2)
+        y1 = int(cy - h / 2)
+        x2 = int(cx + w / 2)
+        y2 = int(cy + h / 2)
+        return (x1, y1, x2, y2)
+
+    # -------------------------------------------------------
+    def reset(self):
+        """FULL RESET for NO confirmation or new object."""
+        self.initialized = False
+        self.missing_frames = 0
+
+    # -------------------------------------------------------
+    def update(self, bbox):
         """
-        bbox: (x1, y1, x2, y2)
-        Update Kalman filter with new measurement.
+        Update Kalman with a new detection.
+        Resets missing counter.
         """
-        cx, cy, w, h = self._bbox_to_state(bbox)
 
-        meas = np.array([[cx], [cy], [w], [h]], dtype=np.float32)
+        measurement = self._bbox_to_measure(bbox)
 
+        # First frame → full init
         if not self.initialized:
-            # Initialize state
-            self.kf.statePost = np.array([[cx], [cy], [0], [0], [w], [h]], dtype=np.float32)
+            self.kf.statePost[:4, 0] = measurement.reshape(4)
+            self.kf.statePost[4:, 0] = 0
             self.initialized = True
+            self.missing_frames = 0
             return bbox
 
-        self.kf.correct(meas)
+        # Normal predict → correct update
+        _ = self.kf.predict()
+        self.kf.correct(measurement.reshape(4, 1))
 
-        # Stability scoring
-        pred = self.kf.predict()
-        px, py, vx, vy, pw, ph = pred.flatten()
+        self.missing_frames = 0
 
-        deviation = np.sqrt((cx - px)**2 + (cy - py)**2)  # pixel drift
-        size_change = abs(w - pw) + abs(h - ph)
+        smoothed = self.kf.statePost[:4, 0]
+        return self._measure_to_bbox(smoothed)
 
-        # High stability → high score
-        self.stable_score = np.exp(-(deviation + 0.5 * size_change) / 40)
-
-        return (int(px - pw/2), int(py - ph/2), int(px + pw/2), int(py + ph/2))
-
-    def predict(self):
+    # -------------------------------------------------------
+    def predict_only(self):
         """
-        Predict next position without measurement.
+        Use when contour disappeared temporarily.
+        If object missing for too long → reset.
         """
+
         if not self.initialized:
-            return None, 0.0
+            return None
+
+        self.missing_frames += 1
+
+        # too many missing frames → object gone
+        if self.missing_frames > self.max_missing:
+            self.reset()
+            return None
 
         pred = self.kf.predict()
-        px, py, vx, vy, pw, ph = pred.flatten()
-        bbox = (int(px - pw/2), int(py - ph/2), int(px + pw/2), int(py + ph/2))
-
-        return bbox, self.stable_score
+        smoothed = pred[:4, 0]
+        return self._measure_to_bbox(smoothed)

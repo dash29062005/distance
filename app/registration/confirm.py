@@ -1,30 +1,44 @@
 import cv2
+import numpy as np
+import time
 
-class ConfirmDialog:
-    def __init__(self, window_name="Confirm Registration"):
-        self.window_name = window_name
+
+class HumanConfirm:
+    """
+    Simple YES/NO popup for confirming auto-registration.
+    Blocks until user presses:
+        y → YES
+        n → NO
+        q → cancel (treated as NO)
+    """
+
+    def __init__(self, window="Confirm Object"):
+        self.window = window
 
     def ask(self, crop_rgb):
         """
-        Displays a blocking window with the crop.
-        User presses 'y' to accept, 'n' to reject.
-        Returns: True or False
+        Show crop and wait for user input.
+
+        Returns:
+            True  → YES
+            False → NO
         """
-        img_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
-        cv2.imshow(self.window_name, img_bgr)
+        img = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+        disp = img.copy()
+
+        cv2.putText(disp, "Confirm this object? (y/n)",
+                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 255, 0), 2)
+
+        cv2.imshow(self.window, disp)
 
         while True:
-            key = cv2.waitKey(0) & 0xFF
+            key = cv2.waitKey(1) & 0xFF
 
-            if key == ord('y') or key == ord('Y'):
-                cv2.destroyWindow(self.window_name)
+            if key == ord('y'):
+                cv2.destroyWindow(self.window)
                 return True
 
-            if key == ord('n') or key == ord('N'):
-                cv2.destroyWindow(self.window_name)
-                return False
-
-            # allow escape as reject
-            if key == 27:  # ESC
-                cv2.destroyWindow(self.window_name)
+            if key == ord('n') or key == ord('q'):
+                cv2.destroyWindow(self.window)
                 return False

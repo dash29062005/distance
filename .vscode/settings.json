@@ -1,0 +1,10 @@
+{
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+
+    "python.defaultInterpreterPath": "C:\\venvs\\cv_env\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.useEnvFile": true,
+    "python.envFile": "${workspaceFolder}/.env",
+
+    
+}
